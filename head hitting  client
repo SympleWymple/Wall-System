@@ -1,0 +1,259 @@
+local Players = game: GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local SoundService = game:GetService("SoundService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local Knit = require(ReplicatedStorage.Packages.Knit)
+local Constant = require(ReplicatedStorage.Modules.Constants)
+local Multipliers = require(ReplicatedStorage.Modules.Multiplier)
+
+local Character = Players.LocalPlayer.Character or Players.LocalPlayer.CharacterAdded:Wait()
+
+local HeadSmashController = Knit.CreateController({Name = "HeadSmashController"})
+
+local Remotes = ReplicatedStorage.Remotes
+
+local AutoTrain = false
+local AutoHit = false
+local AutoTrainDebounce = false
+local AutoHitDebounce = false
+local AutoTrainButton = Players.LocalPlayer.PlayerGui:WaitForChild("Main").HUD.Right.AutoTrain
+local AutoHitButton = Players.LocalPlayer.PlayerGui:WaitForChild("Main").HUD.Right.AutoSwing
+
+local AutoTrainRedColor = "rbxassetid://13861029967"
+local AutoTrainGreenColor = "rbxassetid://15068878390"
+
+local HeadButtDebounce = false
+local HeadButtAnimation = Instance.new("Animation")
+HeadButtAnimation.AnimationId = Constant.HeadButtTableAnimation
+local BUTTON_INFO = TweenInfo.new(.08, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+
+local ShakeMoveTime = 0.1
+local ShakeMaximumDistance = 0.5
+local NumberOfShakes = 6
+
+local BaseTime = 0.02
+local BaseMovementDistance = 0.3
+local RepeatAmount = 2
+
+local TIShakeCamera = TweenInfo.new(BaseTime, Enum.EasingStyle.Linear)
+
+local TIFirstMoveForward = TweenInfo.new(BaseTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TILastMoveBackward = TweenInfo.new(BaseTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+local TIFullMove = TweenInfo.new(BaseTime*2, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+
+local function PlayTween(Table: Part, GoalPosition, info)
+	local tween = TweenService:Create(Table, info, {Position = GoalPosition})
+	tween:Play()
+	tween.Completed:Wait()
+end
+
+local function ShakeCamera()
+	--task.spawn(function()
+	--	for i=1, NumberOfShakes do
+	--		local x = math.random(-100*ShakeMaximumDistance,100*ShakeMaximumDistance)/100
+	--		local y = math.random(-100*ShakeMaximumDistance,100*ShakeMaximumDistance)/100
+	--		local z = math.random(-100*ShakeMaximumDistance,100*ShakeMaximumDistance)/100
+	--		local FinalOffset = Vector3.new(x,y,z)
+	--		local tween = TweenService:Create(game.Players.LocalPlayer.Character.Humanoid, TIShakeCamera, {CameraOffset = FinalOffset})
+	--		tween:Play()
+	--		tween.Completed:Wait()
+	--	end
+	--	local FinalOffset = Vector3.new(0,0,0)
+	--	local tween = TS:Create(game.Players.LocalPlayer.Character.Humanoid, TIShakeCamera, {CameraOffset = FinalOffset})
+	--	tween:Play()
+	--	tween.Completed:Wait()
+	--end)
+end
+
+local function ShakeTable(Table)
+	if Table.ClassName == "Model" then
+		for i, Part in pairs(Table:GetChildren()) do
+			task.spawn(function() ShakeTable(Part) end)
+		end
+		return
+	end
+
+	local StartPosition = Table.Position
+	local FarthestPosition = StartPosition - Vector3.new(0,BaseMovementDistance,0)
+	local ClosestPosition = StartPosition + Vector3.new(0,BaseMovementDistance,0)
+
+	PlayTween(Table, FarthestPosition, TIFirstMoveForward)
+	PlayTween(Table, ClosestPosition, TIFullMove)
+	for i=1, RepeatAmount do
+		PlayTween(Table, FarthestPosition, TIFullMove)
+		PlayTween(Table, ClosestPosition, TIFullMove)
+	end
+	PlayTween(Table, StartPosition, TILastMoveBackward)
+end
+
+local function HeadButtAciton()
+    local WallHitController = Knit.GetController("WallHitController")
+    local RemoteService = Knit.GetService("RemoteService")
+
+    if HeadButtDebounce ==  false then
+        HeadButtDebounce = true
+
+        local succ, err = pcall(function()
+            SoundService:PlayLocalSound(SoundService.SFX.Random.Swoosh)
+            --HeadSmashController.animationTrack:AdjustSpeed(Multipliers.HeadButtSpeed(Players.LocalPlayer))
+            HeadSmashController.animationTrack:Play()
+            local delayTime = 0.3
+            local Type = 1
+            local World = 1
+            local Model = 1
+
+            local HRPPos = Players.LocalPlayer.Character.HumanoidRootPart.Position
+            local HPRCFrame = Players.LocalPlayer.Character.HumanoidRootPart.CFrame
+            task.spawn(function()
+                Type, World, Model = RemoteService:HeadButt(delayTime, HRPPos, HPRCFrame):expect()
+            end)
+            task.wait(delayTime) --/ Multipliers.HeadButtSpeed(Players.LocalPlayer))
+            repeat wait() until Model ~= 1
+
+            if Model and Type == "Table" then
+                task.spawn(function() ShakeTable(Model) end)
+                SoundService:PlayLocalSound(SoundService.SFX.Random.Hit)
+                ShakeCamera()
+            else
+                if Type == "Wall" and Model then
+                    SoundService:PlayLocalSound(SoundService.SFX.Random.Hit)
+                    task.spawn(function() 
+                        WallHitController:WallHit(World, Model)
+                    end)
+                end
+            end
+            --here shake table
+
+            if HeadSmashController.animationTrack.IsPlaying then
+                HeadSmashController.animationTrack.Stopped:Wait()
+            end
+        end)
+
+        HeadButtDebounce = false
+    end
+end
+--> AUTO TRAIN STUFF
+function HeadSmashController:StartAutoTrain()
+    local DataController = Knit.GetController("DataController")
+    local Replica = DataController:GetReplica("PlayerProfile")
+    local GameServiceHandler = Knit.GetService("GameServiceHandler")
+
+    local currentWorld = Replica.Data.World
+
+    if game.Players.LocalPlayer.MembershipType == Enum.MembershipType.Premium or Replica.Data.Gamepass.VIP then
+        print("Player is a vip")
+        GameServiceHandler:TeleportToTable(currentWorld, "Vip")
+    else
+        local random = math.random(1, #workspace.Chairs:FindFirstChild(currentWorld):GetChildren() - 1 ) 
+        GameServiceHandler:TeleportToTable(currentWorld, random)
+        print("Player is not vip")
+    end
+end
+
+function HeadSmashController:StartAutoHit()
+	local DataController = Knit.GetController("DataController")
+	local Replica = DataController:GetReplica("PlayerProfile")
+	
+	--> put player on start point
+	local End = workspace.Walls[Replica.Data.World].Reward.PrimaryPart.Position
+	Players.LocalPlayer.Character:SetPrimaryPartCFrame(workspace.Walls[Replica.Data.World].Start.CFrame)
+	task.spawn(function()
+		while true do
+			if AutoHit then
+				Players.LocalPlayer.Character.Humanoid:MoveTo(End)
+				
+			end
+			task.wait()
+		end
+	end)
+end
+
+function HeadSmashController:KnitStart()
+	local UIController  = Knit.GetController("UIController")
+	local DataController = Knit.GetController("DataController")
+	local Replica = DataController:GetReplica("PlayerProfile").Data
+	
+	self.animationTrack = Character.Humanoid:LoadAnimation(HeadButtAnimation)
+	self.animationTrack.Priority = Enum.AnimationPriority.Action4
+	
+	Players.LocalPlayer.CharacterAdded:Connect(function(character: Model) 
+		self.animationTrack = character:WaitForChild("Humanoid"):LoadAnimation(HeadButtAnimation)
+		self.animationTrack.Priority = Enum.AnimationPriority.Action4
+	end)
+	UserInputService.InputBegan:Connect(function(input, chatting)
+		if not chatting then
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				HeadButtAciton()
+			end
+		end
+	end)
+	
+	--> AUTO TRAIN STUFF
+	UIController:BindButton(AutoTrainButton, function()
+		if not AutoTrainDebounce then
+			AutoTrainDebounce = true
+			if not AutoTrain or AutoHit then
+                AutoTrain = true
+				AutoTrainButton.TextLabel.Text = "Auto Train On"
+				AutoTrainButton.TextLabel.UIStroke.Color = Color3.fromRGB(33, 99, 19)
+				AutoTrainButton.Image = AutoTrainGreenColor
+				self:StartAutoTrain()
+				
+				AutoHitButton.TextLabel.Text = "Auto Swing Off"
+				AutoHitButton.Image = AutoTrainRedColor
+				AutoHitButton.TextLabel.UIStroke.Color = Color3.fromRGB(99, 7, 1)
+				Players.LocalPlayer.Character.Humanoid:Move(Players.LocalPlayer.Character.PrimaryPart.Position)
+            else
+                AutoTrain = false
+				AutoTrainButton.TextLabel.Text = "Auto Train Off"
+				AutoTrainButton.Image = AutoTrainRedColor
+				AutoTrainButton.TextLabel.UIStroke.Color = Color3.fromRGB(99, 7, 1)
+			end
+
+            AutoHit = false
+			AutoTrainDebounce = false
+		end
+	end)
+	
+	
+	UIController:BindButton(AutoHitButton, function()
+		if not AutoHitDebounce then
+			AutoHitDebounce = true
+			
+			if not AutoHit or AutoTrain then
+                AutoHit = true
+				AutoHitButton.TextLabel.Text = "Auto Swing On"
+				AutoHitButton.TextLabel.UIStroke.Color = Color3.fromRGB(33, 99, 19)
+				AutoHitButton.Image = AutoTrainGreenColor
+				self:StartAutoHit()
+				
+				AutoTrainButton.TextLabel.Text = "Auto Train Off"
+				AutoTrainButton.Image = AutoTrainRedColor
+				AutoTrainButton.TextLabel.UIStroke.Color = Color3.fromRGB(99, 7, 1)
+			else
+                AutoHit = false
+				AutoHitButton.TextLabel.Text = "Auto Swing Off"
+				AutoHitButton.Image = AutoTrainRedColor
+				AutoHitButton.TextLabel.UIStroke.Color = Color3.fromRGB(99, 7, 1)
+				Players.LocalPlayer.Character.Humanoid:Move(Players.LocalPlayer.Character.PrimaryPart.Position)
+			end
+            AutoTrain = false
+			AutoHitDebounce = false
+		end
+	end)
+	
+	
+	task.spawn(function()
+		while true do
+			while task.wait(0.5) do
+				if AutoTrain or AutoHit then
+					HeadButtAciton()
+				end
+			end
+		end
+	end)
+end
+
+return HeadSmashController
